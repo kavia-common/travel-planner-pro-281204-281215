@@ -55,7 +55,7 @@ export async function listUsers() {
 
 // PUBLIC_INTERFACE
 export async function createTrip(payload) {
-  /** Create a trip: {user_id, name, start_date?, end_date?}. */
+  /** Create a trip: {user_id, name, start_date?, end_date?, currency_code?}. */
   return request("/trips", { method: "POST", body: JSON.stringify(payload) });
 }
 
@@ -158,7 +158,7 @@ export async function listBudgetExpenses(tripId) {
 
 // PUBLIC_INTERFACE
 export async function createBudgetExpense(tripId, payload) {
-  /** Create a budget expense: {category_id?, amount, spent_on?, description?}. */
+  /** Create a budget expense: {category_id?, amount, currency_code?, spent_on?, description?}. */
   return request(`/trips/${tripId}/budget/expenses`, { method: "POST", body: JSON.stringify(payload) });
 }
 

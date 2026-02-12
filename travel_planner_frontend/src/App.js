@@ -87,10 +87,23 @@ function Sidebar({ user, trips }) {
   );
 }
 
+const SUPPORTED_CURRENCIES = [
+  { code: "USD", label: "USD — US Dollar" },
+  { code: "EUR", label: "EUR — Euro" },
+  { code: "GBP", label: "GBP — British Pound" },
+  { code: "JPY", label: "JPY — Japanese Yen" },
+  { code: "CAD", label: "CAD — Canadian Dollar" },
+  { code: "AUD", label: "AUD — Australian Dollar" },
+  { code: "CHF", label: "CHF — Swiss Franc" },
+  { code: "CNY", label: "CNY — Chinese Yuan" },
+  { code: "INR", label: "INR — Indian Rupee" }
+];
+
 function Dashboard({ user, onCreateTrip }) {
   const [tripName, setTripName] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [currencyCode, setCurrencyCode] = useState("USD");
 
   return (
     <div className="stack">
@@ -133,10 +146,34 @@ function Dashboard({ user, onCreateTrip }) {
                   aria-label="End date"
                 />
               </div>
+
+              <div className="row">
+                <select
+                  className="input"
+                  value={currencyCode}
+                  onChange={(e) => setCurrencyCode(e.target.value)}
+                  aria-label="Trip currency"
+                >
+                  {SUPPORTED_CURRENCIES.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+                <div className="small">Base currency for this trip’s budget tracker.</div>
+              </div>
+
               <div className="row">
                 <button
                   className="btn btnPrimary"
-                  onClick={() => onCreateTrip({ name: tripName, start_date: startDate || null, end_date: endDate || null })}
+                  onClick={() =>
+                    onCreateTrip({
+                      name: tripName,
+                      start_date: startDate || null,
+                      end_date: endDate || null,
+                      currency_code: currencyCode
+                    })
+                  }
                   disabled={!tripName.trim()}
                 >
                   Create trip
@@ -200,13 +237,21 @@ function TripsList({ trips }) {
   );
 }
 
-function money(v) {
+function normalizeCurrencyCode(code) {
+  const c = String(code || "").trim().toUpperCase();
+  if (!c) return "USD";
+  return c;
+}
+
+function money(v, currencyCode = "USD") {
   if (v === null || v === undefined || Number.isNaN(Number(v))) return "—";
-  return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(Number(v));
+  const currency = normalizeCurrencyCode(currencyCode);
+  return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(Number(v));
 }
 
 function BudgetTracker({
   tripId,
+  tripCurrency,
   budgetLoading,
   totals,
   budgetSummary,
@@ -321,18 +366,18 @@ function BudgetTracker({
       <div className="grid3">
         <div className="card" style={{ boxShadow: "none" }}>
           <div className="sectionTitle">Planned</div>
-          <div style={{ fontSize: 22, fontWeight: 800 }}>{money(totals.plannedTotal)}</div>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>{money(totals.plannedTotal, tripCurrency)}</div>
           <div className="small">Total planned across categories</div>
         </div>
         <div className="card" style={{ boxShadow: "none" }}>
           <div className="sectionTitle">Actual</div>
-          <div style={{ fontSize: 22, fontWeight: 800 }}>{money(totals.actualTotal)}</div>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>{money(totals.actualTotal, tripCurrency)}</div>
           <div className="small">Sum of logged expenses</div>
         </div>
         <div className="card" style={{ boxShadow: "none" }}>
           <div className="sectionTitle">Remaining</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: totals.remaining < 0 ? "var(--danger)" : "inherit" }}>
-            {money(totals.remaining)}
+            {money(totals.remaining, tripCurrency)}
           </div>
           <div className="small">{totals.remaining < 0 ? "Over budget" : "Under budget"}</div>
         </div>
@@ -390,7 +435,7 @@ function BudgetTracker({
                         {r.name}
                       </div>
                       <div className="small" style={{ color: r.remaining < 0 ? "var(--danger)" : "var(--muted)" }}>
-                        {money(r.actual)} / {money(r.planned)}
+                        {money(r.actual, tripCurrency)} / {money(r.planned, tripCurrency)}
                       </div>
                     </div>
                     <div
@@ -433,7 +478,7 @@ function BudgetTracker({
                 topSpending.map((e) => (
                   <div key={e.id} className="listItem">
                     <div>
-                      <div className="listItemTitle">{money(e.amount)}</div>
+                      <div className="listItemTitle">{money(e.amount, tripCurrency)}</div>
                       <div className="meta">
                         <span>{e.spent_on ? String(e.spent_on) : "—"}</span>
                         <span>{e.category_name || "Uncategorized"}</span>
@@ -538,10 +583,10 @@ function BudgetTracker({
                             </div>
                           </div>
                           <div className="meta">
-                            <span>Planned: {money(c.planned_amount)}</span>
-                            <span>Actual: {money(c.actual_amount)}</span>
+                            <span>Planned: {money(c.planned_amount, tripCurrency)}</span>
+                            <span>Actual: {money(c.actual_amount, tripCurrency)}</span>
                             <span style={{ color: Number(c.remaining_amount) < 0 ? "var(--danger)" : "inherit" }}>
-                              Remaining: {money(c.remaining_amount)}
+                              Remaining: {money(c.remaining_amount, tripCurrency)}
                             </span>
                           </div>
 
@@ -763,7 +808,7 @@ function BudgetTracker({
               {budgetExpenses.map((e) => (
                 <div key={e.id} className="listItem">
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="listItemTitle">{money(e.amount)}</div>
+                    <div className="listItemTitle">{money(e.amount, tripCurrency)}</div>
                     <div className="meta">
                       <span>{e.spent_on ? String(e.spent_on) : "—"}</span>
                       <span>{e.category_name || "Uncategorized"}</span>
@@ -909,7 +954,11 @@ function TripDetail({ reloadToken }) {
         <div>
           <h1 className="h1">{trip ? trip.name : "Trip"}</h1>
           <p className="p">
-            {trip ? `Dates: ${formatDate(trip.start_date)} → ${formatDate(trip.end_date)}` : "Loading..."}
+            {trip
+              ? `Dates: ${formatDate(trip.start_date)} → ${formatDate(trip.end_date)} · Currency: ${normalizeCurrencyCode(
+                  trip.currency_code
+                )}`
+              : "Loading..."}
           </p>
         </div>
       </div>
@@ -947,6 +996,7 @@ function TripDetail({ reloadToken }) {
         ) : (
           <BudgetTracker
             tripId={tripId}
+            tripCurrency={normalizeCurrencyCode(trip?.currency_code)}
             budgetLoading={budgetLoading}
             totals={totals}
             budgetSummary={budgetSummary}
@@ -1246,14 +1296,15 @@ function App() {
     };
   }, [user, reloadToken]);
 
-  async function onCreateTrip({ name, start_date, end_date }) {
+  async function onCreateTrip({ name, start_date, end_date, currency_code }) {
     try {
       setError("");
       const trip = await createTrip({
         user_id: user.id,
         name,
         start_date,
-        end_date
+        end_date,
+        currency_code
       });
       setReloadToken((x) => x + 1);
       nav(`/trips/${trip.id}`);
