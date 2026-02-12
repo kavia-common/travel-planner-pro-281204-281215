@@ -163,6 +163,12 @@ export async function createBudgetExpense(tripId, payload) {
 }
 
 // PUBLIC_INTERFACE
+export async function updateBudgetExpense(tripId, expenseId, payload) {
+  /** Update a budget expense: {category_id?, amount?, spent_on?, description?}. */
+  return request(`/trips/${tripId}/budget/expenses/${expenseId}`, { method: "PATCH", body: JSON.stringify(payload) });
+}
+
+// PUBLIC_INTERFACE
 export async function deleteBudgetExpense(tripId, expenseId) {
   /** Delete a budget expense. */
   return request(`/trips/${tripId}/budget/expenses/${expenseId}`, { method: "DELETE" });

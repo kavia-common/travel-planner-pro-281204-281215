@@ -23,12 +23,41 @@ import {
   listItineraryDays,
   listNotes,
   listTrips,
-  updateBudgetCategory
+  updateBudgetCategory,
+  updateBudgetExpense
 } from "./api/client";
 
 function formatDate(d) {
   if (!d) return "—";
   return String(d);
+}
+
+function clamp01(n) {
+  return Math.min(1, Math.max(0, n));
+}
+
+function parseNumberOrNull(v) {
+  const s = String(v ?? "").trim();
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function pickCategoryColor(index) {
+  const palette = ["#3b82f6", "#06b6d4", "#8b5cf6", "#f59e0b", "#10b981", "#ef4444", "#64748b"];
+  return palette[index % palette.length];
+}
+
+function formatPct(p) {
+  const v = Math.round(clamp01(p) * 100);
+  return `${v}%`;
+}
+
+function categoryProgress(c) {
+  const planned = Number(c?.planned_amount ?? 0);
+  const actual = Number(c?.actual_amount ?? 0);
+  const pct = planned > 0 ? clamp01(actual / planned) : 0;
+  return { planned, actual, pct, remaining: planned - actual };
 }
 
 function Sidebar({ user, trips }) {
@@ -176,6 +205,602 @@ function money(v) {
   return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(Number(v));
 }
 
+function BudgetTracker({
+  tripId,
+  budgetLoading,
+  totals,
+  budgetSummary,
+  budgetCategories,
+  budgetExpenses,
+  catName,
+  catPlanned,
+  setCatName,
+  setCatPlanned,
+  expCategoryId,
+  expAmount,
+  expSpentOn,
+  expDesc,
+  setExpCategoryId,
+  setExpAmount,
+  setExpSpentOn,
+  setExpDesc,
+  loadBudget,
+  setError
+}) {
+  const [editingCategoryId, setEditingCategoryId] = useState(null);
+  const [editCatName, setEditCatName] = useState("");
+  const [editCatPlanned, setEditCatPlanned] = useState("");
+
+  const [editingExpenseId, setEditingExpenseId] = useState(null);
+  const [editExpCategoryId, setEditExpCategoryId] = useState("");
+  const [editExpAmount, setEditExpAmount] = useState("");
+  const [editExpSpentOn, setEditExpSpentOn] = useState("");
+  const [editExpDesc, setEditExpDesc] = useState("");
+
+  const byCategory = budgetSummary?.by_category || [];
+
+  const topSpending = useMemo(() => {
+    const list = [...(budgetExpenses || [])].sort((a, b) => Number(b.amount ?? 0) - Number(a.amount ?? 0));
+    return list.slice(0, 6);
+  }, [budgetExpenses]);
+
+  const categoryActualChart = useMemo(() => {
+    const rows = byCategory
+      .map((c, idx) => {
+        const p = categoryProgress(c);
+        return {
+          id: c.id,
+          name: c.name,
+          planned: p.planned,
+          actual: p.actual,
+          pct: p.pct,
+          remaining: p.remaining,
+          color: c.color || pickCategoryColor(idx)
+        };
+      })
+      .sort((a, b) => b.actual - a.actual);
+
+    const max = Math.max(1, ...rows.map((r) => r.actual));
+    return { rows, max };
+  }, [byCategory]);
+
+  async function startEditCategory(c) {
+    setEditingCategoryId(c.id);
+    setEditCatName(String(c.name ?? ""));
+    setEditCatPlanned(String(c.planned_amount ?? ""));
+  }
+
+  async function saveCategory(categoryId) {
+    const planned = parseNumberOrNull(editCatPlanned);
+    if (!editCatName.trim() || planned === null) {
+      setError("Category name and planned amount are required.");
+      return;
+    }
+    try {
+      setError("");
+      await updateBudgetCategory(tripId, categoryId, { name: editCatName.trim(), planned_amount: planned });
+      setEditingCategoryId(null);
+      await loadBudget();
+    } catch (e) {
+      setError(e.message || "Failed to update category");
+    }
+  }
+
+  async function startEditExpense(e) {
+    setEditingExpenseId(e.id);
+    setEditExpCategoryId(String(e.category_id ?? ""));
+    setEditExpAmount(String(e.amount ?? ""));
+    setEditExpSpentOn(String(e.spent_on ?? ""));
+    setEditExpDesc(String(e.description ?? ""));
+  }
+
+  async function saveExpense(expenseId) {
+    const amt = parseNumberOrNull(editExpAmount);
+    if (amt === null) {
+      setError("Expense amount is required.");
+      return;
+    }
+
+    try {
+      setError("");
+      await updateBudgetExpense(tripId, expenseId, {
+        category_id: editExpCategoryId ? editExpCategoryId : null,
+        amount: amt,
+        spent_on: editExpSpentOn.trim() ? editExpSpentOn.trim() : null,
+        description: editExpDesc.trim() ? editExpDesc.trim() : null
+      });
+      setEditingExpenseId(null);
+      await loadBudget();
+    } catch (e) {
+      setError(e.message || "Failed to update expense");
+    }
+  }
+
+  return (
+    <div className="stack">
+      <div className="grid3">
+        <div className="card" style={{ boxShadow: "none" }}>
+          <div className="sectionTitle">Planned</div>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>{money(totals.plannedTotal)}</div>
+          <div className="small">Total planned across categories</div>
+        </div>
+        <div className="card" style={{ boxShadow: "none" }}>
+          <div className="sectionTitle">Actual</div>
+          <div style={{ fontSize: 22, fontWeight: 800 }}>{money(totals.actualTotal)}</div>
+          <div className="small">Sum of logged expenses</div>
+        </div>
+        <div className="card" style={{ boxShadow: "none" }}>
+          <div className="sectionTitle">Remaining</div>
+          <div style={{ fontSize: 22, fontWeight: 800, color: totals.remaining < 0 ? "var(--danger)" : "inherit" }}>
+            {money(totals.remaining)}
+          </div>
+          <div className="small">{totals.remaining < 0 ? "Over budget" : "Under budget"}</div>
+        </div>
+      </div>
+
+      <div style={{ height: 8 }} />
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <div>
+          <div className="small">Spend progress</div>
+          <div className="kbdHint">Goal: keep actual ≤ planned ({formatPct(totals.pct)})</div>
+        </div>
+        <div className="small">
+          {budgetLoading ? "Refreshing…" : totals.remaining < 0 ? "Over budget" : "On track"}
+        </div>
+      </div>
+
+      <div
+        style={{
+          height: 10,
+          borderRadius: 999,
+          background: "rgba(100, 116, 139, 0.15)",
+          overflow: "hidden",
+          border: "1px solid var(--border)"
+        }}
+        aria-label="Budget progress"
+        role="progressbar"
+        aria-valuenow={Math.round(clamp01(totals.pct) * 100)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+      >
+        <div
+          style={{
+            width: `${Math.round(clamp01(totals.pct) * 100)}%`,
+            height: "100%",
+            background: totals.remaining < 0 ? "rgba(239, 68, 68, 0.8)" : "rgba(59, 130, 246, 0.8)"
+          }}
+        />
+      </div>
+
+      <div className="card" style={{ boxShadow: "none" }}>
+        <div className="sectionTitle">Visuals</div>
+        <div className="miniChartRow">
+          <div>
+            <div className="small" style={{ marginBottom: 10 }}>
+              Actual spend by category
+            </div>
+            <div className="stack" style={{ gap: 10 }}>
+              {categoryActualChart.rows.length === 0 ? (
+                <div className="small">Add a category and expense to see charts.</div>
+              ) : (
+                categoryActualChart.rows.slice(0, 8).map((r) => (
+                  <div key={r.id}>
+                    <div className="row" style={{ justifyContent: "space-between" }}>
+                      <div className="small" style={{ fontWeight: 700, color: "var(--text)" }}>
+                        {r.name}
+                      </div>
+                      <div className="small" style={{ color: r.remaining < 0 ? "var(--danger)" : "var(--muted)" }}>
+                        {money(r.actual)} / {money(r.planned)}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        height: 10,
+                        borderRadius: 999,
+                        background: "rgba(100, 116, 139, 0.12)",
+                        overflow: "hidden",
+                        border: "1px solid var(--border)",
+                        marginTop: 6
+                      }}
+                      aria-label={`Spend bar for ${r.name}`}
+                    >
+                      <div
+                        style={{
+                          width: `${Math.round(clamp01(r.actual / categoryActualChart.max) * 100)}%`,
+                          height: "100%",
+                          background: r.color,
+                          opacity: 0.85
+                        }}
+                      />
+                    </div>
+                    <div className="kbdHint" style={{ marginTop: 4 }}>
+                      Budget usage: {formatPct(r.pct)} {r.remaining < 0 ? "(over)" : ""}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div>
+            <div className="small" style={{ marginBottom: 10 }}>
+              Top expenses
+            </div>
+            <div className="list">
+              {topSpending.length === 0 ? (
+                <div className="small">No expenses yet.</div>
+              ) : (
+                topSpending.map((e) => (
+                  <div key={e.id} className="listItem">
+                    <div>
+                      <div className="listItemTitle">{money(e.amount)}</div>
+                      <div className="meta">
+                        <span>{e.spent_on ? String(e.spent_on) : "—"}</span>
+                        <span>{e.category_name || "Uncategorized"}</span>
+                        <span>{e.description || "—"}</span>
+                      </div>
+                    </div>
+                    <div className="row">
+                      <button className="iconBtn" onClick={() => startEditExpense(e)} aria-label="Edit expense">
+                        Edit
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="kbdHint" style={{ marginTop: 8 }}>
+              Tip: click “Edit” on an expense to quickly recategorize it.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid2" style={{ marginTop: 14 }}>
+        <div className="card" style={{ boxShadow: "none" }}>
+          <div className="sectionTitle">Categories</div>
+
+          <div className="stack">
+            <div className="inlineForm" aria-label="Add budget category">
+              <input
+                className="input"
+                value={catName}
+                onChange={(e) => setCatName(e.target.value)}
+                placeholder="Category (e.g., Food)"
+                aria-label="Budget category name"
+              />
+              <input
+                className="input"
+                value={catPlanned}
+                onChange={(e) => setCatPlanned(e.target.value)}
+                placeholder="Planned (e.g., 500)"
+                aria-label="Planned amount"
+              />
+              <button
+                className="btn btnPrimary"
+                disabled={!catName.trim() || parseNumberOrNull(catPlanned) === null}
+                onClick={async () => {
+                  try {
+                    setError("");
+                    const planned = parseNumberOrNull(catPlanned);
+                    await createBudgetCategory(tripId, {
+                      name: catName.trim(),
+                      planned_amount: planned ?? 0
+                    });
+                    setCatName("");
+                    setCatPlanned("");
+                    await loadBudget();
+                  } catch (e) {
+                    setError(e.message || "Failed to create category");
+                  }
+                }}
+              >
+                Add
+              </button>
+            </div>
+
+            <div className="list">
+              {byCategory.length === 0 ? <div className="small">No categories yet.</div> : null}
+
+              {byCategory.map((c, idx) => {
+                const p = categoryProgress(c);
+                const color = c.color || pickCategoryColor(idx);
+
+                const isEditing = editingCategoryId === c.id;
+                return (
+                  <div key={c.id} className="listItem">
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {isEditing ? (
+                        <div className="stack" style={{ gap: 10 }}>
+                          <div className="inlineForm2">
+                            <input
+                              className="input"
+                              value={editCatName}
+                              onChange={(e) => setEditCatName(e.target.value)}
+                              aria-label="Edit category name"
+                            />
+                            <input
+                              className="input"
+                              value={editCatPlanned}
+                              onChange={(e) => setEditCatPlanned(e.target.value)}
+                              aria-label="Edit category planned amount"
+                            />
+                          </div>
+                          <div className="kbdHint">Enter a planned amount (number). Save or cancel to exit edit mode.</div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="row" style={{ justifyContent: "space-between" }}>
+                            <div className="listItemTitle">{c.name}</div>
+                            <div className="small" style={{ color }}>
+                              {formatPct(p.pct)}
+                            </div>
+                          </div>
+                          <div className="meta">
+                            <span>Planned: {money(c.planned_amount)}</span>
+                            <span>Actual: {money(c.actual_amount)}</span>
+                            <span style={{ color: Number(c.remaining_amount) < 0 ? "var(--danger)" : "inherit" }}>
+                              Remaining: {money(c.remaining_amount)}
+                            </span>
+                          </div>
+
+                          <div
+                            style={{
+                              height: 10,
+                              borderRadius: 999,
+                              background: "rgba(100, 116, 139, 0.12)",
+                              overflow: "hidden",
+                              border: "1px solid var(--border)",
+                              marginTop: 10
+                            }}
+                            aria-label={`Budget usage for ${c.name}`}
+                          >
+                            <div
+                              style={{
+                                width: `${Math.round(clamp01(p.pct) * 100)}%`,
+                                height: "100%",
+                                background: p.remaining < 0 ? "rgba(239, 68, 68, 0.75)" : color,
+                                opacity: 0.9
+                              }}
+                            />
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    <div className="row">
+                      {isEditing ? (
+                        <>
+                          <button className="iconBtn" onClick={() => saveCategory(c.id)} aria-label="Save category">
+                            Save
+                          </button>
+                          <button
+                            className="iconBtn"
+                            onClick={() => {
+                              setEditingCategoryId(null);
+                              setEditCatName("");
+                              setEditCatPlanned("");
+                            }}
+                            aria-label="Cancel category edit"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button className="iconBtn" onClick={() => startEditCategory(c)} aria-label="Edit category">
+                            Edit
+                          </button>
+                          <button
+                            className="iconBtn iconBtnDanger"
+                            onClick={async () => {
+                              if (!window.confirm("Delete category? Expenses will be kept but become uncategorized.")) return;
+                              try {
+                                setError("");
+                                await deleteBudgetCategory(tripId, c.id);
+                                await loadBudget();
+                              } catch (e) {
+                                setError(e.message || "Failed to delete category");
+                              }
+                            }}
+                            aria-label="Delete category"
+                          >
+                            Delete
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <div className="card" style={{ boxShadow: "none" }}>
+          <div className="sectionTitle">Expenses</div>
+
+          {editingExpenseId ? (
+            <div className="card" style={{ boxShadow: "none", borderStyle: "dashed" }}>
+              <div className="sectionTitle">Edit expense</div>
+              <div className="stack">
+                <div className="row">
+                  <select
+                    className="input"
+                    value={editExpCategoryId}
+                    onChange={(e) => setEditExpCategoryId(e.target.value)}
+                    aria-label="Edit expense category"
+                  >
+                    <option value="">Uncategorized</option>
+                    {budgetCategories.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    className="input"
+                    value={editExpAmount}
+                    onChange={(e) => setEditExpAmount(e.target.value)}
+                    aria-label="Edit expense amount"
+                    placeholder="Amount"
+                  />
+                </div>
+
+                <div className="row">
+                  <input
+                    className="input"
+                    value={editExpSpentOn}
+                    onChange={(e) => setEditExpSpentOn(e.target.value)}
+                    aria-label="Edit spent on date"
+                    placeholder="Date (YYYY-MM-DD, optional)"
+                  />
+                  <input
+                    className="input"
+                    value={editExpDesc}
+                    onChange={(e) => setEditExpDesc(e.target.value)}
+                    aria-label="Edit description"
+                    placeholder="Description (optional)"
+                  />
+                </div>
+
+                <div className="row">
+                  <button className="btn btnPrimary" onClick={() => saveExpense(editingExpenseId)}>
+                    Save changes
+                  </button>
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      setEditingExpenseId(null);
+                      setEditExpCategoryId("");
+                      setEditExpAmount("");
+                      setEditExpSpentOn("");
+                      setEditExpDesc("");
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <span className="small">Editing expense ID: {String(editingExpenseId).slice(0, 8)}…</span>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="stack">
+            <div className="row">
+              <select
+                className="input"
+                value={expCategoryId}
+                onChange={(e) => setExpCategoryId(e.target.value)}
+                aria-label="Expense category"
+              >
+                <option value="">Uncategorized</option>
+                {budgetCategories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="input"
+                value={expAmount}
+                onChange={(e) => setExpAmount(e.target.value)}
+                placeholder="Amount (e.g., 42.50)"
+                aria-label="Expense amount"
+              />
+            </div>
+
+            <div className="row">
+              <input
+                className="input"
+                value={expSpentOn}
+                onChange={(e) => setExpSpentOn(e.target.value)}
+                placeholder="Date (YYYY-MM-DD, optional)"
+                aria-label="Spent on date"
+              />
+              <input
+                className="input"
+                value={expDesc}
+                onChange={(e) => setExpDesc(e.target.value)}
+                placeholder="Description (optional)"
+                aria-label="Expense description"
+              />
+            </div>
+
+            <div className="row">
+              <button
+                className="btn btnPrimary"
+                disabled={parseNumberOrNull(expAmount) === null}
+                onClick={async () => {
+                  try {
+                    setError("");
+                    const amt = parseNumberOrNull(expAmount);
+                    await createBudgetExpense(tripId, {
+                      category_id: expCategoryId || null,
+                      amount: amt ?? 0,
+                      spent_on: expSpentOn.trim() ? expSpentOn.trim() : null,
+                      description: expDesc.trim() ? expDesc.trim() : null
+                    });
+                    setExpAmount("");
+                    setExpSpentOn("");
+                    setExpDesc("");
+                    setExpCategoryId("");
+                    await loadBudget();
+                  } catch (e) {
+                    setError(e.message || "Failed to add expense");
+                  }
+                }}
+              >
+                Add expense
+              </button>
+              <span className="small">Click “Edit” on any expense to modify it.</span>
+            </div>
+
+            <div className="list">
+              {budgetExpenses.length === 0 ? <div className="small">No expenses yet.</div> : null}
+
+              {budgetExpenses.map((e) => (
+                <div key={e.id} className="listItem">
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="listItemTitle">{money(e.amount)}</div>
+                    <div className="meta">
+                      <span>{e.spent_on ? String(e.spent_on) : "—"}</span>
+                      <span>{e.category_name || "Uncategorized"}</span>
+                      <span>{e.description || "—"}</span>
+                    </div>
+                  </div>
+                  <div className="row">
+                    <button className="iconBtn" onClick={() => startEditExpense(e)} aria-label="Edit expense">
+                      Edit
+                    </button>
+                    <button
+                      className="iconBtn iconBtnDanger"
+                      onClick={async () => {
+                        if (!window.confirm("Delete expense?")) return;
+                        try {
+                          setError("");
+                          await deleteBudgetExpense(tripId, e.id);
+                          await loadBudget();
+                        } catch (er) {
+                          setError(er.message || "Failed to delete expense");
+                        }
+                      }}
+                      aria-label="Delete expense"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TripDetail({ reloadToken }) {
   const { tripId } = useParams();
   const [error, setError] = useState("");
@@ -274,7 +899,7 @@ function TripDetail({ reloadToken }) {
     const plannedTotal = Number(budgetSummary?.totals?.planned_total ?? 0);
     const actualTotal = Number(budgetSummary?.totals?.actual_total ?? 0);
     const remaining = plannedTotal - actualTotal;
-    const pct = plannedTotal > 0 ? Math.min(1, Math.max(0, actualTotal / plannedTotal)) : 0;
+    const pct = plannedTotal > 0 ? clamp01(actualTotal / plannedTotal) : 0;
     return { plannedTotal, actualTotal, remaining, pct };
   }, [budgetSummary]);
 
@@ -320,250 +945,28 @@ function TripDetail({ reloadToken }) {
             Budget endpoints not available yet (backend/DB not updated). Once backend is updated, this section will populate.
           </div>
         ) : (
-          <div className="stack">
-            <div className="grid3">
-              <div className="card" style={{ boxShadow: "none" }}>
-                <div className="sectionTitle">Planned</div>
-                <div style={{ fontSize: 22, fontWeight: 800 }}>{money(totals.plannedTotal)}</div>
-                <div className="small">Total planned across categories</div>
-              </div>
-              <div className="card" style={{ boxShadow: "none" }}>
-                <div className="sectionTitle">Actual</div>
-                <div style={{ fontSize: 22, fontWeight: 800 }}>{money(totals.actualTotal)}</div>
-                <div className="small">Sum of logged expenses</div>
-              </div>
-              <div className="card" style={{ boxShadow: "none" }}>
-                <div className="sectionTitle">Remaining</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: totals.remaining < 0 ? "var(--danger)" : "inherit" }}>
-                  {money(totals.remaining)}
-                </div>
-                <div className="small">{totals.remaining < 0 ? "Over budget" : "Under budget"}</div>
-              </div>
-            </div>
-
-            <div style={{ height: 10 }} />
-            <div className="small">Spend progress</div>
-            <div
-              style={{
-                height: 10,
-                borderRadius: 999,
-                background: "rgba(100, 116, 139, 0.15)",
-                overflow: "hidden",
-                border: "1px solid var(--border)"
-              }}
-              aria-label="Budget progress"
-              role="progressbar"
-              aria-valuenow={Math.round(totals.pct * 100)}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            >
-              <div
-                style={{
-                  width: `${Math.round(totals.pct * 100)}%`,
-                  height: "100%",
-                  background: totals.remaining < 0 ? "rgba(239, 68, 68, 0.8)" : "rgba(59, 130, 246, 0.8)"
-                }}
-              />
-            </div>
-
-            <div className="grid2" style={{ marginTop: 14 }}>
-              <div className="card" style={{ boxShadow: "none" }}>
-                <div className="sectionTitle">Categories (planned)</div>
-                <div className="stack">
-                  <div className="row">
-                    <input
-                      className="input"
-                      value={catName}
-                      onChange={(e) => setCatName(e.target.value)}
-                      placeholder="Category (e.g., Food)"
-                      aria-label="Budget category name"
-                    />
-                    <input
-                      className="input"
-                      value={catPlanned}
-                      onChange={(e) => setCatPlanned(e.target.value)}
-                      placeholder="Planned (e.g., 500)"
-                      aria-label="Planned amount"
-                    />
-                    <button
-                      className="btn btnPrimary"
-                      disabled={!catName.trim() || !String(catPlanned).trim()}
-                      onClick={async () => {
-                        try {
-                          setError("");
-                          await createBudgetCategory(tripId, { name: catName.trim(), planned_amount: Number(catPlanned) });
-                          setCatName("");
-                          setCatPlanned("");
-                          await loadBudget();
-                        } catch (e) {
-                          setError(e.message || "Failed to create category");
-                        }
-                      }}
-                    >
-                      Add
-                    </button>
-                  </div>
-
-                  <div className="list">
-                    {(budgetSummary.by_category || []).map((c) => (
-                      <div key={c.id} className="listItem">
-                        <div>
-                          <div className="listItemTitle">{c.name}</div>
-                          <div className="meta">
-                            <span>Planned: {money(c.planned_amount)}</span>
-                            <span>Actual: {money(c.actual_amount)}</span>
-                            <span style={{ color: Number(c.remaining_amount) < 0 ? "var(--danger)" : "inherit" }}>
-                              Remaining: {money(c.remaining_amount)}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="row">
-                          <button
-                            className="btn"
-                            onClick={async () => {
-                              const newPlanned = window.prompt("New planned amount", String(c.planned_amount ?? ""));
-                              if (newPlanned === null) return;
-                              try {
-                                setError("");
-                                await updateBudgetCategory(tripId, c.id, { planned_amount: Number(newPlanned) });
-                                await loadBudget();
-                              } catch (e) {
-                                setError(e.message || "Failed to update category");
-                              }
-                            }}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            className="btn"
-                            onClick={async () => {
-                              if (!window.confirm("Delete category? Expenses will be kept but become uncategorized.")) return;
-                              try {
-                                setError("");
-                                await deleteBudgetCategory(tripId, c.id);
-                                await loadBudget();
-                              } catch (e) {
-                                setError(e.message || "Failed to delete category");
-                              }
-                            }}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                    {(budgetSummary.by_category || []).length === 0 ? <div className="small">No categories yet.</div> : null}
-                  </div>
-                </div>
-              </div>
-
-              <div className="card" style={{ boxShadow: "none" }}>
-                <div className="sectionTitle">Expenses (actual)</div>
-                <div className="stack">
-                  <div className="row">
-                    <select
-                      className="input"
-                      value={expCategoryId}
-                      onChange={(e) => setExpCategoryId(e.target.value)}
-                      aria-label="Expense category"
-                    >
-                      <option value="">Uncategorized</option>
-                      {budgetCategories.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      className="input"
-                      value={expAmount}
-                      onChange={(e) => setExpAmount(e.target.value)}
-                      placeholder="Amount (e.g., 42.50)"
-                      aria-label="Expense amount"
-                    />
-                  </div>
-
-                  <div className="row">
-                    <input
-                      className="input"
-                      value={expSpentOn}
-                      onChange={(e) => setExpSpentOn(e.target.value)}
-                      placeholder="Date (YYYY-MM-DD, optional)"
-                      aria-label="Spent on date"
-                    />
-                    <input
-                      className="input"
-                      value={expDesc}
-                      onChange={(e) => setExpDesc(e.target.value)}
-                      placeholder="Description (optional)"
-                      aria-label="Expense description"
-                    />
-                  </div>
-
-                  <div className="row">
-                    <button
-                      className="btn btnPrimary"
-                      disabled={!String(expAmount).trim()}
-                      onClick={async () => {
-                        try {
-                          setError("");
-                          await createBudgetExpense(tripId, {
-                            category_id: expCategoryId || null,
-                            amount: Number(expAmount),
-                            spent_on: expSpentOn || null,
-                            description: expDesc || null
-                          });
-                          setExpAmount("");
-                          setExpSpentOn("");
-                          setExpDesc("");
-                          setExpCategoryId("");
-                          await loadBudget();
-                        } catch (e) {
-                          setError(e.message || "Failed to add expense");
-                        }
-                      }}
-                    >
-                      Add expense
-                    </button>
-                    <span className="small">Tip: leave category empty to log later.</span>
-                  </div>
-
-                  <div className="list">
-                    {budgetExpenses.map((e) => (
-                      <div key={e.id} className="listItem">
-                        <div>
-                          <div className="listItemTitle">{money(e.amount)}</div>
-                          <div className="meta">
-                            <span>{e.spent_on ? String(e.spent_on) : "—"}</span>
-                            <span>{e.category_name || "Uncategorized"}</span>
-                            <span>{e.description || "—"}</span>
-                          </div>
-                        </div>
-                        <div className="row">
-                          <button
-                            className="btn"
-                            onClick={async () => {
-                              if (!window.confirm("Delete expense?")) return;
-                              try {
-                                setError("");
-                                await deleteBudgetExpense(tripId, e.id);
-                                await loadBudget();
-                              } catch (er) {
-                                setError(er.message || "Failed to delete expense");
-                              }
-                            }}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                    {budgetExpenses.length === 0 ? <div className="small">No expenses yet.</div> : null}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          <BudgetTracker
+            tripId={tripId}
+            budgetLoading={budgetLoading}
+            totals={totals}
+            budgetSummary={budgetSummary}
+            budgetCategories={budgetCategories}
+            budgetExpenses={budgetExpenses}
+            catName={catName}
+            catPlanned={catPlanned}
+            setCatName={setCatName}
+            setCatPlanned={setCatPlanned}
+            expCategoryId={expCategoryId}
+            expAmount={expAmount}
+            expSpentOn={expSpentOn}
+            expDesc={expDesc}
+            setExpCategoryId={setExpCategoryId}
+            setExpAmount={setExpAmount}
+            setExpSpentOn={setExpSpentOn}
+            setExpDesc={setExpDesc}
+            loadBudget={loadBudget}
+            setError={setError}
+          />
         )}
       </div>
 
