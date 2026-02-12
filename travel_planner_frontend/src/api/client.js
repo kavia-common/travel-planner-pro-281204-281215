@@ -120,6 +120,60 @@ export async function listActivities(tripId) {
   return request(`/trips/${tripId}/activities`, { method: "GET" });
 }
 
+/**
+ * -----------------------
+ * Budget Tracker
+ * -----------------------
+ */
+
+// PUBLIC_INTERFACE
+export async function listBudgetCategories(tripId) {
+  /** List budget categories for a trip. */
+  return request(`/trips/${tripId}/budget/categories`, { method: "GET" });
+}
+
+// PUBLIC_INTERFACE
+export async function createBudgetCategory(tripId, payload) {
+  /** Create a budget category: {name, planned_amount, color?}. */
+  return request(`/trips/${tripId}/budget/categories`, { method: "POST", body: JSON.stringify(payload) });
+}
+
+// PUBLIC_INTERFACE
+export async function updateBudgetCategory(tripId, categoryId, payload) {
+  /** Update a budget category: {name?, planned_amount?, color?}. */
+  return request(`/trips/${tripId}/budget/categories/${categoryId}`, { method: "PATCH", body: JSON.stringify(payload) });
+}
+
+// PUBLIC_INTERFACE
+export async function deleteBudgetCategory(tripId, categoryId) {
+  /** Delete a budget category. */
+  return request(`/trips/${tripId}/budget/categories/${categoryId}`, { method: "DELETE" });
+}
+
+// PUBLIC_INTERFACE
+export async function listBudgetExpenses(tripId) {
+  /** List budget expenses for a trip. */
+  return request(`/trips/${tripId}/budget/expenses`, { method: "GET" });
+}
+
+// PUBLIC_INTERFACE
+export async function createBudgetExpense(tripId, payload) {
+  /** Create a budget expense: {category_id?, amount, spent_on?, description?}. */
+  return request(`/trips/${tripId}/budget/expenses`, { method: "POST", body: JSON.stringify(payload) });
+}
+
+// PUBLIC_INTERFACE
+export async function deleteBudgetExpense(tripId, expenseId) {
+  /** Delete a budget expense. */
+  return request(`/trips/${tripId}/budget/expenses/${expenseId}`, { method: "DELETE" });
+}
+
+// PUBLIC_INTERFACE
+export async function getBudgetSummary(tripId) {
+  /** Get budget summary for a trip (planned vs actual, by category + totals). */
+  return request(`/trips/${tripId}/budget/summary`, { method: "GET" });
+}
+
 // PUBLIC_INTERFACE
 export async function createNote(tripId, payload) {
   /** Create note. */

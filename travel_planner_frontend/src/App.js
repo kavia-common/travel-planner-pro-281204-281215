@@ -5,17 +5,25 @@ import {
   addDestination,
   createActivity,
   createAccommodation,
+  createBudgetCategory,
+  createBudgetExpense,
   createItineraryDay,
   createNote,
   createTrip,
   createUser,
+  deleteBudgetCategory,
+  deleteBudgetExpense,
+  getBudgetSummary,
   healthCheck,
   listActivities,
   listAccommodations,
+  listBudgetCategories,
+  listBudgetExpenses,
   listDestinations,
   listItineraryDays,
   listNotes,
-  listTrips
+  listTrips,
+  updateBudgetCategory
 } from "./api/client";
 
 function formatDate(d) {
@@ -163,6 +171,11 @@ function TripsList({ trips }) {
   );
 }
 
+function money(v) {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return "—";
+  return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(Number(v));
+}
+
 function TripDetail({ reloadToken }) {
   const { tripId } = useParams();
   const [error, setError] = useState("");
@@ -173,6 +186,12 @@ function TripDetail({ reloadToken }) {
   const [accommodations, setAccommodations] = useState([]);
   const [activities, setActivities] = useState([]);
   const [notes, setNotes] = useState([]);
+
+  // Budget tracker state
+  const [budgetLoading, setBudgetLoading] = useState(false);
+  const [budgetSummary, setBudgetSummary] = useState(null);
+  const [budgetCategories, setBudgetCategories] = useState([]);
+  const [budgetExpenses, setBudgetExpenses] = useState([]);
 
   // forms
   const [destName, setDestName] = useState("");
@@ -187,6 +206,30 @@ function TripDetail({ reloadToken }) {
 
   const [noteTitle, setNoteTitle] = useState("");
   const [noteContent, setNoteContent] = useState("");
+
+  // Budget forms
+  const [catName, setCatName] = useState("");
+  const [catPlanned, setCatPlanned] = useState("");
+  const [expCategoryId, setExpCategoryId] = useState("");
+  const [expAmount, setExpAmount] = useState("");
+  const [expSpentOn, setExpSpentOn] = useState("");
+  const [expDesc, setExpDesc] = useState("");
+
+  async function loadBudget() {
+    try {
+      setBudgetLoading(true);
+      const [cats, exps, summary] = await Promise.all([
+        listBudgetCategories(tripId),
+        listBudgetExpenses(tripId),
+        getBudgetSummary(tripId)
+      ]);
+      setBudgetCategories(cats);
+      setBudgetExpenses(exps);
+      setBudgetSummary(summary);
+    } finally {
+      setBudgetLoading(false);
+    }
+  }
 
   useEffect(() => {
     let mounted = true;
@@ -211,12 +254,29 @@ function TripDetail({ reloadToken }) {
       } catch (e) {
         setError(e.message || "Failed to load trip");
       }
+
+      // Budget is optional: if backend hasn't been updated yet, we show a friendly error.
+      try {
+        await loadBudget();
+      } catch (e) {
+        if (!mounted) return;
+        // Keep this separate from main error so other trip features still work.
+        setBudgetSummary(null);
+      }
     }
     load();
     return () => {
       mounted = false;
     };
   }, [tripId, reloadToken]);
+
+  const totals = useMemo(() => {
+    const plannedTotal = Number(budgetSummary?.totals?.planned_total ?? 0);
+    const actualTotal = Number(budgetSummary?.totals?.actual_total ?? 0);
+    const remaining = plannedTotal - actualTotal;
+    const pct = plannedTotal > 0 ? Math.min(1, Math.max(0, actualTotal / plannedTotal)) : 0;
+    return { plannedTotal, actualTotal, remaining, pct };
+  }, [budgetSummary]);
 
   return (
     <div className="stack">
@@ -230,6 +290,282 @@ function TripDetail({ reloadToken }) {
       </div>
 
       {error ? <div className="errorBox">{error}</div> : null}
+
+      <div className="card">
+        <div className="headerRow" style={{ marginBottom: 10 }}>
+          <div>
+            <div className="sectionTitle">Budget tracker</div>
+            <div className="small">Plan category budgets and log expenses (planned vs actual).</div>
+          </div>
+          <div className="row">
+            <button
+              className="btn"
+              onClick={async () => {
+                try {
+                  setError("");
+                  await loadBudget();
+                } catch (e) {
+                  setError(e.message || "Failed to refresh budget");
+                }
+              }}
+              disabled={budgetLoading}
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {!budgetSummary ? (
+          <div className="small">
+            Budget endpoints not available yet (backend/DB not updated). Once backend is updated, this section will populate.
+          </div>
+        ) : (
+          <div className="stack">
+            <div className="grid3">
+              <div className="card" style={{ boxShadow: "none" }}>
+                <div className="sectionTitle">Planned</div>
+                <div style={{ fontSize: 22, fontWeight: 800 }}>{money(totals.plannedTotal)}</div>
+                <div className="small">Total planned across categories</div>
+              </div>
+              <div className="card" style={{ boxShadow: "none" }}>
+                <div className="sectionTitle">Actual</div>
+                <div style={{ fontSize: 22, fontWeight: 800 }}>{money(totals.actualTotal)}</div>
+                <div className="small">Sum of logged expenses</div>
+              </div>
+              <div className="card" style={{ boxShadow: "none" }}>
+                <div className="sectionTitle">Remaining</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: totals.remaining < 0 ? "var(--danger)" : "inherit" }}>
+                  {money(totals.remaining)}
+                </div>
+                <div className="small">{totals.remaining < 0 ? "Over budget" : "Under budget"}</div>
+              </div>
+            </div>
+
+            <div style={{ height: 10 }} />
+            <div className="small">Spend progress</div>
+            <div
+              style={{
+                height: 10,
+                borderRadius: 999,
+                background: "rgba(100, 116, 139, 0.15)",
+                overflow: "hidden",
+                border: "1px solid var(--border)"
+              }}
+              aria-label="Budget progress"
+              role="progressbar"
+              aria-valuenow={Math.round(totals.pct * 100)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+            >
+              <div
+                style={{
+                  width: `${Math.round(totals.pct * 100)}%`,
+                  height: "100%",
+                  background: totals.remaining < 0 ? "rgba(239, 68, 68, 0.8)" : "rgba(59, 130, 246, 0.8)"
+                }}
+              />
+            </div>
+
+            <div className="grid2" style={{ marginTop: 14 }}>
+              <div className="card" style={{ boxShadow: "none" }}>
+                <div className="sectionTitle">Categories (planned)</div>
+                <div className="stack">
+                  <div className="row">
+                    <input
+                      className="input"
+                      value={catName}
+                      onChange={(e) => setCatName(e.target.value)}
+                      placeholder="Category (e.g., Food)"
+                      aria-label="Budget category name"
+                    />
+                    <input
+                      className="input"
+                      value={catPlanned}
+                      onChange={(e) => setCatPlanned(e.target.value)}
+                      placeholder="Planned (e.g., 500)"
+                      aria-label="Planned amount"
+                    />
+                    <button
+                      className="btn btnPrimary"
+                      disabled={!catName.trim() || !String(catPlanned).trim()}
+                      onClick={async () => {
+                        try {
+                          setError("");
+                          await createBudgetCategory(tripId, { name: catName.trim(), planned_amount: Number(catPlanned) });
+                          setCatName("");
+                          setCatPlanned("");
+                          await loadBudget();
+                        } catch (e) {
+                          setError(e.message || "Failed to create category");
+                        }
+                      }}
+                    >
+                      Add
+                    </button>
+                  </div>
+
+                  <div className="list">
+                    {(budgetSummary.by_category || []).map((c) => (
+                      <div key={c.id} className="listItem">
+                        <div>
+                          <div className="listItemTitle">{c.name}</div>
+                          <div className="meta">
+                            <span>Planned: {money(c.planned_amount)}</span>
+                            <span>Actual: {money(c.actual_amount)}</span>
+                            <span style={{ color: Number(c.remaining_amount) < 0 ? "var(--danger)" : "inherit" }}>
+                              Remaining: {money(c.remaining_amount)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="row">
+                          <button
+                            className="btn"
+                            onClick={async () => {
+                              const newPlanned = window.prompt("New planned amount", String(c.planned_amount ?? ""));
+                              if (newPlanned === null) return;
+                              try {
+                                setError("");
+                                await updateBudgetCategory(tripId, c.id, { planned_amount: Number(newPlanned) });
+                                await loadBudget();
+                              } catch (e) {
+                                setError(e.message || "Failed to update category");
+                              }
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="btn"
+                            onClick={async () => {
+                              if (!window.confirm("Delete category? Expenses will be kept but become uncategorized.")) return;
+                              try {
+                                setError("");
+                                await deleteBudgetCategory(tripId, c.id);
+                                await loadBudget();
+                              } catch (e) {
+                                setError(e.message || "Failed to delete category");
+                              }
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {(budgetSummary.by_category || []).length === 0 ? <div className="small">No categories yet.</div> : null}
+                  </div>
+                </div>
+              </div>
+
+              <div className="card" style={{ boxShadow: "none" }}>
+                <div className="sectionTitle">Expenses (actual)</div>
+                <div className="stack">
+                  <div className="row">
+                    <select
+                      className="input"
+                      value={expCategoryId}
+                      onChange={(e) => setExpCategoryId(e.target.value)}
+                      aria-label="Expense category"
+                    >
+                      <option value="">Uncategorized</option>
+                      {budgetCategories.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      className="input"
+                      value={expAmount}
+                      onChange={(e) => setExpAmount(e.target.value)}
+                      placeholder="Amount (e.g., 42.50)"
+                      aria-label="Expense amount"
+                    />
+                  </div>
+
+                  <div className="row">
+                    <input
+                      className="input"
+                      value={expSpentOn}
+                      onChange={(e) => setExpSpentOn(e.target.value)}
+                      placeholder="Date (YYYY-MM-DD, optional)"
+                      aria-label="Spent on date"
+                    />
+                    <input
+                      className="input"
+                      value={expDesc}
+                      onChange={(e) => setExpDesc(e.target.value)}
+                      placeholder="Description (optional)"
+                      aria-label="Expense description"
+                    />
+                  </div>
+
+                  <div className="row">
+                    <button
+                      className="btn btnPrimary"
+                      disabled={!String(expAmount).trim()}
+                      onClick={async () => {
+                        try {
+                          setError("");
+                          await createBudgetExpense(tripId, {
+                            category_id: expCategoryId || null,
+                            amount: Number(expAmount),
+                            spent_on: expSpentOn || null,
+                            description: expDesc || null
+                          });
+                          setExpAmount("");
+                          setExpSpentOn("");
+                          setExpDesc("");
+                          setExpCategoryId("");
+                          await loadBudget();
+                        } catch (e) {
+                          setError(e.message || "Failed to add expense");
+                        }
+                      }}
+                    >
+                      Add expense
+                    </button>
+                    <span className="small">Tip: leave category empty to log later.</span>
+                  </div>
+
+                  <div className="list">
+                    {budgetExpenses.map((e) => (
+                      <div key={e.id} className="listItem">
+                        <div>
+                          <div className="listItemTitle">{money(e.amount)}</div>
+                          <div className="meta">
+                            <span>{e.spent_on ? String(e.spent_on) : "—"}</span>
+                            <span>{e.category_name || "Uncategorized"}</span>
+                            <span>{e.description || "—"}</span>
+                          </div>
+                        </div>
+                        <div className="row">
+                          <button
+                            className="btn"
+                            onClick={async () => {
+                              if (!window.confirm("Delete expense?")) return;
+                              try {
+                                setError("");
+                                await deleteBudgetExpense(tripId, e.id);
+                                await loadBudget();
+                              } catch (er) {
+                                setError(er.message || "Failed to delete expense");
+                              }
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {budgetExpenses.length === 0 ? <div className="small">No expenses yet.</div> : null}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
 
       <div className="grid3">
         <div className="card">
